@@ -1,52 +1,143 @@
 const { Server } = require("socket.io");
-const io = new Server(3001, {
-    cors: {
-        origin: "http://localhost:5173", 
-        methods: ["GET", "POST"]
-    }
-});
 
-// Salas predefinidas
-const rooms = {
-    "Sala 1": [],
-    "Sala 2": [],
-    "Sala 3": [],
-    "Sala 4": [],
-};
+const io = new Server(3000, { cors: { origin: "*" } });
+
+let rooms = {}; 
 
 io.on("connection", (socket) => {
-    console.log("Un jugador se ha conectado:", socket.id);
+    console.log("Jugador conectado:", socket.id);
 
-    // Enviar la lista de salas predefinidas cuando un jugador se conecta
-    socket.emit("roomsList", Object.keys(rooms));
+    socket.on("getRooms", () => {
+        socket.emit("roomsList", Object.keys(rooms));
+    });
 
-    socket.on("joinRoom", (roomName, playerName) => {
-        if (!rooms[roomName]) {
-            rooms[roomName] = [];
+    socket.on("joinRoom", (room, callback) => { 
+        if (!rooms[room]) {
+            rooms[room] = { 
+                players: {}, 
+                ready: {}, 
+                characters: {}, 
+                timer: null,
+                gameStarted: false
+            };
         }
-        rooms[roomName].push(playerName);
-        socket.join(roomName);
-        io.to(roomName).emit("roomUpdate", rooms[roomName]);
-        console.log(`${playerName} entró a la sala ${roomName}`);
-
-        // Enviar la lista de salas actualizada a todos los clientes
+    
         io.emit("roomsList", Object.keys(rooms));
-    });
-
-    socket.on("leaveRoom", (roomName, playerName) => {
-        if (rooms[roomName]) {
-            rooms[roomName] = rooms[roomName].filter(p => p !== playerName);
-            socket.leave(roomName);
-            io.to(roomName).emit("roomUpdate", rooms[roomName]);
-            console.log(`${playerName} salió de la sala ${roomName}`);
-
-            io.emit("roomsList", Object.keys(rooms));
+    
+        if (rooms[room].players[socket.id]) {
+            if (typeof callback === "function") {
+                return callback({ success: true }); 
+            }
+            return;
+        }
+   
+        if (rooms[room].gameStarted) {
+            if (typeof callback === "function") {
+                return callback({ success: false, message: "La partida ya ha comenzado." });
+            }
+            return;
+        }
+    
+        if (Object.keys(rooms[room].players).length >= 4) {
+            if (typeof callback === "function") {
+                return callback({ success: false, message: "La sala está llena." });
+            }
+            return;
+        }
+    
+        socket.join(room);
+        rooms[room].players[socket.id] = { x: 0, y: 0 }; 
+        rooms[room].ready[socket.id] = false;
+    
+        console.log(`Jugador ${socket.id} se unió a ${room}`);
+        io.to(room).emit("updateLobby", serializeRoom(rooms[room]));
+    
+        if (!rooms[room].timer) {
+            console.log(`Temporizador iniciado para la sala ${room}.`);
+            rooms[room].timer = setTimeout(() => {
+                console.log(`Tiempo agotado en sala ${room}. Iniciando juego con los jugadores presentes...`);
+                startGame(room); 
+            }, 10000); 
+        }
+    
+        if (typeof callback === "function") {
+            callback({ success: true });
         }
     });
+    
+    
+    socket.on("setReady", (room) => {
+        if (rooms[room]) {
+            rooms[room].ready[socket.id] = true;
+            io.to(room).emit("updateLobby", serializeRoom(rooms[room]));
+    
+            if (Object.values(rooms[room].ready).every((r) => r) && Object.keys(rooms[room].players).length >= 2) {
+                console.log(`Todos listos en sala ${room}. Iniciando juego...`);
+                clearTimeout(rooms[room].timer); 
+                startGame(room);
+            }
+        }
+    });
+    
+    function startGame(room) {
+        if (rooms[room] && !rooms[room].gameStarted) {
+            rooms[room].gameStarted = true;
+
+            const players = Object.values(rooms[room].players || {}).map(player => ({
+                id: player.id,
+                character: player.character || "/assets/default.png", 
+                score: player.score || 0,
+                bombs: player.bombs || 1,
+                fire: player.fire || 1
+            }));
+    
+            console.log(`Juego iniciado en sala ${room}`);
+        }
+    }
+    
+    socket.on("selectCharacter", ({ room, character }) => {
+        if (rooms[room]) {
+            rooms[room].characters[socket.id] = character;
+            io.to(room).emit("updateLobby", serializeRoom(rooms[room]));
+        }
+    });
+
+    socket.on("setReady", (room) => {
+        if (rooms[room]) {
+            rooms[room].ready[socket.id] = true;
+            io.to(room).emit("updateLobby", serializeRoom(rooms[room]));
+
+            if (Object.values(rooms[room].ready).every((r) => r)) {
+                startGame(room);
+            }
+        }
+    });
+
 
     socket.on("disconnect", () => {
-        console.log("Un jugador se ha desconectado:", socket.id);
+        for (let room in rooms) {
+            if (rooms[room].players[socket.id]) {
+                delete rooms[room].players[socket.id];
+                delete rooms[room].ready[socket.id];
+                delete rooms[room].characters[socket.id];
+
+                if (Object.keys(rooms[room].players).length === 0) {
+                    clearTimeout(rooms[room].timer);
+                    delete rooms[room];
+                } else {
+                    io.to(room).emit("updateLobby", serializeRoom(rooms[room]));
+                }
+                break;
+            }
+        }
     });
 });
 
-console.log("Servidor WebSocket corriendo en el puerto 3001");
+
+function serializeRoom(room) {
+    const { timer, ...safeRoom } = room; 
+    return JSON.parse(JSON.stringify(safeRoom));
+}
+
+
+console.log("Servidor WebSocket de Bomberman corriendo en el puerto 3000");
