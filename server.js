@@ -1,8 +1,7 @@
 const { Server } = require("socket.io");
-
 const io = new Server(3000, { cors: { origin: "*" } });
 
-let rooms = {}; 
+let rooms = {};
 
 io.on("connection", (socket) => {
     console.log("Jugador conectado:", socket.id);
@@ -64,8 +63,7 @@ io.on("connection", (socket) => {
             callback({ success: true });
         }
     });
-    
-    
+
     socket.on("setReady", (room) => {
         if (rooms[room]) {
             rooms[room].ready[socket.id] = true;
@@ -137,6 +135,5 @@ function serializeRoom(room) {
     const { timer, ...safeRoom } = room; 
     return JSON.parse(JSON.stringify(safeRoom));
 }
-
 
 console.log("Servidor WebSocket de Bomberman corriendo en el puerto 3000");
