@@ -11,7 +11,9 @@ io.on("connection", (socket) => {
         socket.emit("roomsList", Object.keys(rooms));
     });
 
-    socket.on("joinRoom", (room, callback) => { 
+    socket.on("joinRoom", (data, callback) => { 
+        const { room, username } = data;
+        
         if (!rooms[room]) {
             rooms[room] = { 
                 players: {}, 
@@ -46,10 +48,15 @@ io.on("connection", (socket) => {
         }
     
         socket.join(room);
-        rooms[room].players[socket.id] = { x: 0, y: 0 }; 
+        rooms[room].players[socket.id] = { 
+            id: socket.id,
+            x: 0, 
+            y: 0,
+            username: username 
+        }; 
         rooms[room].ready[socket.id] = false;
     
-        console.log(`Jugador ${socket.id} se unió a ${room}`);
+        console.log(`Jugador ${socket.id} (${username}) se unió a ${room}`);
         io.to(room).emit("updateLobby", serializeRoom(rooms[room]));
     
         if (!rooms[room].timer) {
@@ -83,15 +90,17 @@ io.on("connection", (socket) => {
         if (rooms[room] && !rooms[room].gameStarted) {
             rooms[room].gameStarted = true;
 
-            const players = Object.values(rooms[room].players || {}).map(player => ({
-                id: player.id,
-                character: player.character || "/assets/default.png", 
-                score: player.score || 0,
-                bombs: player.bombs || 1,
-                fire: player.fire || 1
+            const players = Object.keys(rooms[room].players).map(playerId => ({
+                id: playerId,
+                username: rooms[room].players[playerId].username,
+                character: rooms[room].characters[playerId] || "/assets/default.png", 
+                score: rooms[room].players[playerId].score || 0,
+                bombs: rooms[room].players[playerId].bombs || 1,
+                fire: rooms[room].players[playerId].fire || 1
             }));
     
-            console.log(`Juego iniciado en sala ${room}`);
+            console.log(`Juego iniciado en sala ${room} con jugadores:`, players.map(p => p.username).join(', '));
+            io.to(room).emit("gameStart", players);
         }
     }
     
@@ -102,21 +111,12 @@ io.on("connection", (socket) => {
         }
     });
 
-    socket.on("setReady", (room) => {
-        if (rooms[room]) {
-            rooms[room].ready[socket.id] = true;
-            io.to(room).emit("updateLobby", serializeRoom(rooms[room]));
-
-            if (Object.values(rooms[room].ready).every((r) => r)) {
-                startGame(room);
-            }
-        }
-    });
-
-
     socket.on("disconnect", () => {
         for (let room in rooms) {
             if (rooms[room].players[socket.id]) {
+                const username = rooms[room].players[socket.id].username;
+                console.log(`Jugador ${socket.id} (${username}) se desconectó de la sala ${room}`);
+                
                 delete rooms[room].players[socket.id];
                 delete rooms[room].ready[socket.id];
                 delete rooms[room].characters[socket.id];
@@ -124,6 +124,7 @@ io.on("connection", (socket) => {
                 if (Object.keys(rooms[room].players).length === 0) {
                     clearTimeout(rooms[room].timer);
                     delete rooms[room];
+                    console.log(`Sala ${room} eliminada por falta de jugadores`);
                 } else {
                     io.to(room).emit("updateLobby", serializeRoom(rooms[room]));
                 }
@@ -135,8 +136,9 @@ io.on("connection", (socket) => {
 
 
 function serializeRoom(room) {
-    const { timer, ...safeRoom } = room; 
-    return JSON.parse(JSON.stringify(safeRoom));
+    // Creamos una copia segura para enviar al cliente sin el timer
+    const { timer, ...roomData } = room;
+    return roomData;
 }
 
 
