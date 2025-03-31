@@ -102,7 +102,7 @@ io.on("connection", (socket) => {
         }
     });
 
-    socket.on("setReady", (room) => {
+    /*socket.on("setReady", (room) => {
         if (rooms[room]) {
             rooms[room].ready[socket.id] = true;
             io.to(room).emit("updateLobby", serializeRoom(rooms[room]));
@@ -111,8 +111,7 @@ io.on("connection", (socket) => {
                 startGame(room);
             }
         }
-    });
-
+    });*/
 
     socket.on("disconnect", () => {
         for (let room in rooms) {
