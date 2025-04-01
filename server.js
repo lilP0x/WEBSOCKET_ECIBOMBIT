@@ -51,16 +51,6 @@ io.on("connection", (socket) => {
             };
         }
 
-        // Validación 3: Verificar si el nombre de usuario ya está en ESTA sala
-        if (rooms[room].usernames.has(username)) {
-            if (typeof callback === "function") {
-                return callback({ 
-                    success: false, 
-                    message: "❌ Este nombre de usuario ya está en uso en esta sala." 
-                });
-            }
-            return;
-        }
     
         // Validación 4: ¿El juego ya comenzó?
         if (rooms[room].gameStarted) {
@@ -176,8 +166,6 @@ io.on("connection", (socket) => {
             }
         }
     });
-    
-    // ... (resto de los eventos permanecen igual)
     
     socket.on("disconnect", () => {
         const room = playerRooms[socket.id];
