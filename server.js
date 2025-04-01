@@ -13,6 +13,8 @@ io.on("connection", (socket) => {
         socket.emit("roomsList", Object.keys(rooms).filter(r => !rooms[r].gameStarted));
     });
 
+    
+
     socket.on("joinRoom", (data, callback) => { 
         const { room, username } = data;
         
@@ -111,7 +113,7 @@ io.on("connection", (socket) => {
                         cleanupRoom(room);
                     }
                 }
-            }, 120000); 
+            }, 1200000); 
         }
     
         // Respuesta exitosa al cliente
@@ -196,7 +198,10 @@ io.on("connection", (socket) => {
                 cleanupRoom(room);
             }
         }
+        socket.emit("roomsList", Object.keys(rooms).filter(r => !rooms[r].gameStarted));
     });
+
+    
 
     function cleanupRoom(room) {
         if (rooms[room]) {
@@ -221,8 +226,43 @@ io.on("connection", (socket) => {
             console.log(`Sala ${room} eliminada`);
         }
     }
+
+    socket.on("setReady", (room) => {
+        if (rooms[room]) {
+            rooms[room].ready[socket.id] = true;
+            io.to(room).emit("updateLobby", serializeRoom(rooms[room]));
+
+            if (Object.values(rooms[room].ready).every((r) => r)) {
+                startGame(room);
+            }
+        }
+    });
+
+    socket.on("selectCharacter", ({ room, character }) => {
+        if (rooms[room]) {
+            rooms[room].characters[socket.id] = character;
+            io.to(room).emit("updateLobby", serializeRoom(rooms[room]));
+        }
+    });
 });
 
+function startGame(room) {
+    if (rooms[room] && !rooms[room].gameStarted) {
+        rooms[room].gameStarted = true;
+
+        const players = Object.keys(rooms[room].players).map(playerId => ({
+            id: playerId,
+            username: rooms[room].players[playerId].username,
+            character: rooms[room].characters[playerId] || "/assets/default.png", 
+            score: rooms[room].players[playerId].score || 0,
+            bombs: rooms[room].players[playerId].bombs || 1,
+            fire: rooms[room].players[playerId].fire || 1
+        }));
+
+        console.log(`Juego iniciado en sala ${room} con jugadores:`, players.map(p => p.username).join(', '));
+        io.to(room).emit("gameStart", players);
+    }
+}
 
 
 function serializeRoom(room) {
