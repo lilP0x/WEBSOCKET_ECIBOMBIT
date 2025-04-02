@@ -18,9 +18,14 @@ io.on("connection", (socket) => {
             rooms[room] = { 
                 players: {}, 
                 ready: {}, 
-                characters: {}, 
-                timer: null,
-                gameStarted: false
+                characters: {},
+                owner: socket.id, //El primer jugador en crear la sala es el dueño
+                gameStarted: false,
+                config: {
+                    map: "mapa1", //Mapa por defecto
+                    time: 5,      //Tiempo por defecto (minutos)
+                    items: 2      //Ítems por defecto
+                }
             };
         }
     
@@ -31,7 +36,7 @@ io.on("connection", (socket) => {
                 return callback({ success: true }); 
             }
             return;
-        }
+        } //ESTO SE PUEDE QUITAR
    
         if (rooms[room].gameStarted) {
             if (typeof callback === "function") {
@@ -59,14 +64,6 @@ io.on("connection", (socket) => {
         console.log(`Jugador ${socket.id} (${username}) se unió a ${room}`);
         io.to(room).emit("updateLobby", serializeRoom(rooms[room]));
     
-        if (!rooms[room].timer) {
-            console.log(`Temporizador iniciado para la sala ${room}.`);
-            rooms[room].timer = setTimeout(() => {
-                console.log(`Tiempo agotado en sala ${room}. Iniciando juego con los jugadores presentes...`);
-                startGame(room); 
-            }, 10000); 
-        }
-    
         if (typeof callback === "function") {
             callback({ success: true });
         }
@@ -76,32 +73,71 @@ io.on("connection", (socket) => {
         if (rooms[room]) {
             rooms[room].ready[socket.id] = true;
             io.to(room).emit("updateLobby", serializeRoom(rooms[room]));
-    
-            if (Object.values(rooms[room].ready).every((r) => r) && Object.keys(rooms[room].players).length >= 2) {
-                console.log(`Todos listos en sala ${room}. Iniciando juego...`);
-                clearTimeout(rooms[room].timer); 
-                startGame(room);
-            }
         }
     });
-    
-    function startGame(room) {
-        if (rooms[room] && !rooms[room].gameStarted) {
-            rooms[room].gameStarted = true;
 
-            const players = Object.keys(rooms[room].players).map(playerId => ({
-                id: playerId,
-                username: rooms[room].players[playerId].username,
-                character: rooms[room].characters[playerId] || "/assets/default.png",
-                score: rooms[room].players[playerId].score || 0,
-                bombs: rooms[room].players[playerId].bombs || 1,
-                fire: rooms[room].players[playerId].fire || 1
-            }));
-    
-            console.log(`Juego iniciado en sala ${room} con jugadores:`, players.map(p => p.username).join(', '));
-            io.to(room).emit("gameStart", players);
+    //Nueva funcionalidad: Configuración de la sala
+    socket.on("setRoomConfig", ({ room, map, time, items }, callback) => {
+        if (!rooms[room]) return;
+
+        if (socket.id !== rooms[room].owner) {
+            if (typeof callback === "function") {
+                return callback({ success: false, message: "Solo el creador puede cambiar la configuración." });
+            }
+            return;
         }
-    }
+
+        if (map) rooms[room].config.map = map;
+        if (time) rooms[room].config.time = time;
+        if (items) rooms[room].config.items = items;
+
+        io.to(room).emit("updateLobby", serializeRoom(rooms[room]));
+
+        if (typeof callback === "function") {
+            callback({ success: true });
+        }
+    });
+
+    socket.on("startGame", (room, callback) => {
+        if (!rooms[room]) return;
+
+        if (socket.id !== rooms[room].owner) {
+            if (typeof callback === "function") {
+                return callback({ success: false, message: "Solo el creador puede iniciar la partida." });
+            }
+            return;
+        }
+
+        //Verificamos que al menos 2 jugadores estén listos
+        const readyPlayers = Object.values(rooms[room].ready).filter(r => r).length;
+        if (readyPlayers < 2) {
+            if (typeof callback === "function") {
+                return callback({ success: false, message: "Se necesitan al menos 2 jugadores listos para iniciar." });
+            }
+            return;
+        }
+
+        //Iniciar el juego
+        rooms[room].gameStarted = true;
+        const players = Object.keys(rooms[room].players).map(playerId => ({
+            id: playerId,
+            username: rooms[room].players[playerId].username,
+            character: rooms[room].characters[playerId] || "/assets/default.png",
+            score: 0,
+            bombs: 1,
+            fire: 1
+        }));
+
+        console.log(`Juego iniciado en sala ${room} con jugadores:`, players.map(p => p.username).join(', '));
+        io.to(room).emit("gameStart", {
+            players,
+            config: rooms[room].config
+        });
+
+        if (typeof callback === "function") {
+            callback({ success: true });
+        }
+    });
     
     socket.on("selectCharacter", ({ room, character }) => {
         if (rooms[room]) {
@@ -120,17 +156,25 @@ io.on("connection", (socket) => {
                 delete rooms[room].ready[socket.id];
                 delete rooms[room].characters[socket.id];
 
-                if (Object.keys(rooms[room].players).length === 0) {
-                    clearTimeout(rooms[room].timer);
-                    delete rooms[room];
-                    console.log(`Sala ${room} eliminada por falta de jugadores`);
-                } else {
-                    io.to(room).emit("updateLobby", serializeRoom(rooms[room]));
+                // Si el creador se va, delegamos el rol a otro jugador
+                if (rooms[room].owner === socket.id) {
+                    const remainingPlayers = Object.keys(rooms[room].players);
+                    if (remainingPlayers.length > 0) {
+                        rooms[room].owner = remainingPlayers[0]; //Nuevo creador
+                        console.log(`Nuevo creador de la sala ${room}: ${rooms[room].owner}`);
+                    } else {
+                        delete rooms[room]; //La sala se borra si queda vacía
+                        console.log(`Sala ${room} eliminada por falta de jugadores`);
+                        break;
+                    }
                 }
+
+                io.to(room).emit("updateLobby", serializeRoom(rooms[room]));
                 break;
             }
         }
     });
+
 });
 
 function serializeRoom(room) {
