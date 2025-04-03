@@ -177,17 +177,17 @@ io.on("connection", (socket) => {
         if (rooms[room].owner === socket.id) {
             const remainingPlayers = Object.keys(rooms[room].players);
             if (remainingPlayers.length > 0) {
-                rooms[room].owner = remainingPlayers[0];
+                rooms[room].owner = remainingPlayers[0]; // Nuevo Owner
                 console.log(`Nuevo creador de la sala ${room}: ${rooms[room].owner}`);
             } else {
-                // Eliminar sala si queda vacía
+                // Si no hay jugadores, eliminar sala y notificar
                 delete rooms[room];
                 console.log(`Sala ${room} eliminada por falta de jugadores`);
                 io.emit("roomsList", Object.keys(rooms)); // Notificar que la sala ya no existe
                 return callback({ success: true });
             }
         }
-
+        // Notificar cambios a todos los jugadores
         io.to(room).emit("updateLobby", serializeRoom(rooms[room]));
         callback({ success: true });
     });
@@ -211,16 +211,16 @@ io.on("connection", (socket) => {
                     } else {
                         delete rooms[room]; //La sala se borra si queda vacía
                         console.log(`Sala ${room} eliminada por falta de jugadores`);
-                        break;
+                        io.emit("roomsList", Object.keys(rooms));
+                        return;
                     }
                 }
-
+                // Notificar cambios
                 io.to(room).emit("updateLobby", serializeRoom(rooms[room]));
                 break;
             }
         }
     });
-
 });
 
 function serializeRoom(room, socketId) {
