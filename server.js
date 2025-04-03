@@ -2,7 +2,7 @@ const { Server } = require("socket.io");
 
 const io = new Server(3000, { cors: { origin: "*" } });
 
-let rooms = {}; 
+let rooms = {};
 
 io.on("connection", (socket) => {
     console.log("Jugador conectado:", socket.id);
@@ -22,9 +22,9 @@ io.on("connection", (socket) => {
                 owner: socket.id, //El primer jugador en crear la sala es el dueño
                 gameStarted: false,
                 config: {
-                    map: "mapa1", //Mapa por defecto
+                    map: "default", //Mapa por defecto
                     time: 5,      //Tiempo por defecto (minutos)
-                    items: 2      //Ítems por defecto
+                    items: 3      //Ítems por defecto
                 }
             };
         }
@@ -36,7 +36,7 @@ io.on("connection", (socket) => {
                 return callback({ success: true }); 
             }
             return;
-        } //ESTO SE PUEDE QUITAR
+        }
    
         if (rooms[room].gameStarted) {
             if (typeof callback === "function") {
@@ -50,6 +50,16 @@ io.on("connection", (socket) => {
                 return callback({ success: false, message: "La sala está llena." });
             }
             return;
+        }
+
+        // Verificar si el usuario ya está en otra sala
+        for (const roomName in rooms) {
+            if (rooms[roomName].players[socket.id]) {
+                return callback({
+                    success: false,
+                    message: "Ya estás en otra sala"
+                });
+            }
         }
     
         socket.join(room);
@@ -69,11 +79,19 @@ io.on("connection", (socket) => {
         }
     });
 
-    socket.on("setReady", (room) => {
-        if (rooms[room]) {
-            rooms[room].ready[socket.id] = true;
-            io.to(room).emit("updateLobby", serializeRoom(rooms[room]));
-        }
+    socket.on("setReady", ({ room, isReady }, callback) => {
+        if (!rooms[room]) return callback({ success: false, message: "Sala no existe" });
+
+        rooms[room].ready[socket.id] = isReady;
+
+        io.to(room).emit("updateLobby", {
+            players: rooms[room].players,
+            characters: rooms[room].characters,
+            ready: rooms[room].ready,
+            config: rooms[room].config
+        });
+
+        callback({ success: true });
     });
 
     //Nueva funcionalidad: Configuración de la sala
@@ -125,7 +143,8 @@ io.on("connection", (socket) => {
             character: rooms[room].characters[playerId] || "/assets/default.png",
             score: 0,
             bombs: 1,
-            fire: 1
+            lasers: 0,
+            hammers: 0
         }));
 
         console.log(`Juego iniciado en sala ${room} con jugadores:`, players.map(p => p.username).join(', '));
@@ -144,6 +163,43 @@ io.on("connection", (socket) => {
             rooms[room].characters[socket.id] = character;
             io.to(room).emit("updateLobby", serializeRoom(rooms[room]));
         }
+    });
+
+    socket.on("leaveRoom", ({ room }, callback) => {
+        if (!rooms[room]) return callback({ success: false, message: "Sala no existe" });
+
+        const username = rooms[room].players[socket.id]?.username || "Usuario desconocido";
+        console.log(`Jugador ${socket.id} (${username}) salió de la sala ${room}`);
+
+        // Eliminar jugador de la sala
+        delete rooms[room].players[socket.id];
+        delete rooms[room].ready[socket.id];
+        delete rooms[room].characters[socket.id];
+
+        // Transferir ownership si era el creador
+        if (rooms[room].owner === socket.id) {
+            const remainingPlayers = Object.keys(rooms[room].players);
+            if (remainingPlayers.length > 0) {
+                rooms[room].owner = remainingPlayers[0];
+                console.log(`Nuevo creador de la sala ${room}: ${rooms[room].owner}`);
+            } else {
+                // Eliminar sala si queda vacía
+                delete rooms[room];
+                console.log(`Sala ${room} eliminada por falta de jugadores`);
+                return callback({ success: true });
+            }
+        }
+
+        // Notificar a los demás jugadores
+        //socket.to(room).emit("updateLobby", serializeRoom(rooms[room]));
+        socket.to(room).emit("updateLobby", {
+            players: rooms[room].players,
+            characters: rooms[room].characters,
+            ready: rooms[room].ready,
+            config: rooms[room].config
+        });
+
+        callback({ success: true });
     });
 
     socket.on("disconnect", () => {
