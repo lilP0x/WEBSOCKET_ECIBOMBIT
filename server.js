@@ -30,13 +30,6 @@ io.on("connection", (socket) => {
         }
     
         io.emit("roomsList", Object.keys(rooms));
-    
-        if (rooms[room].players[socket.id]) {
-            if (typeof callback === "function") {
-                return callback({ success: true }); 
-            }
-            return;
-        }
    
         if (rooms[room].gameStarted) {
             if (typeof callback === "function") {
@@ -65,18 +58,21 @@ io.on("connection", (socket) => {
         socket.join(room);
         rooms[room].players[socket.id] = {
             id: socket.id,
-            x: 0,
-            y: 0,
             username: username
         };
         rooms[room].ready[socket.id] = false;
     
         console.log(`Jugador ${socket.id} (${username}) se unió a ${room}`);
-        io.to(room).emit("updateLobby", serializeRoom(rooms[room]));
-    
+        // IMPORTANTE: Devolver isOwner en el callback
         if (typeof callback === "function") {
-            callback({ success: true });
+            callback({
+                success: true,
+                isOwner: rooms[room].owner === socket.id, // Verifica si el usuario es el dueño
+                config: rooms[room].config
+            });
         }
+
+        io.to(room).emit("updateLobby", serializeRoom(rooms[room], socket.id));
     });
 
     socket.on("setReady", ({ room, isReady }, callback) => {
@@ -94,7 +90,7 @@ io.on("connection", (socket) => {
         callback({ success: true });
     });
 
-    //Nueva funcionalidad: Configuración de la sala
+    //server.js - Nueva funcionalidad: Configuración de la sala
     socket.on("setRoomConfig", ({ room, map, time, items }, callback) => {
         if (!rooms[room]) return;
 
@@ -105,14 +101,15 @@ io.on("connection", (socket) => {
             return;
         }
 
-        if (map) rooms[room].config.map = map;
-        if (time) rooms[room].config.time = time;
-        if (items) rooms[room].config.items = items;
+        // Aplicar cambios si los valores son válidos
+        if (map !== undefined) rooms[room].config.map = map;
+        if (time !== undefined) rooms[room].config.time = time;
+        if (items !== undefined) rooms[room].config.items = items;
 
         io.to(room).emit("updateLobby", serializeRoom(rooms[room]));
 
         if (typeof callback === "function") {
-            callback({ success: true });
+            callback({ success: true, config: rooms[room].config }); // Enviar la config actualizada
         }
     });
 
@@ -186,19 +183,12 @@ io.on("connection", (socket) => {
                 // Eliminar sala si queda vacía
                 delete rooms[room];
                 console.log(`Sala ${room} eliminada por falta de jugadores`);
+                io.emit("roomsList", Object.keys(rooms)); // Notificar que la sala ya no existe
                 return callback({ success: true });
             }
         }
 
-        // Notificar a los demás jugadores
-        //socket.to(room).emit("updateLobby", serializeRoom(rooms[room]));
-        socket.to(room).emit("updateLobby", {
-            players: rooms[room].players,
-            characters: rooms[room].characters,
-            ready: rooms[room].ready,
-            config: rooms[room].config
-        });
-
+        io.to(room).emit("updateLobby", serializeRoom(rooms[room]));
         callback({ success: true });
     });
 
@@ -233,10 +223,12 @@ io.on("connection", (socket) => {
 
 });
 
-function serializeRoom(room) {
-    // Creamos una copia segura para enviar al cliente sin el timer
+function serializeRoom(room, socketId) {
     const { timer, ...roomData } = room;
-    return roomData;
+    return {
+        ...roomData,
+        isOwner: room.owner === socketId, // Determinar si el usuario es el dueño de la sala
+    };
 }
 
 console.log("Servidor WebSocket de Bomberman corriendo en el puerto 3000");
