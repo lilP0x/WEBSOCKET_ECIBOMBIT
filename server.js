@@ -168,27 +168,22 @@ io.on("connection", (socket) => {
         const username = rooms[room].players[socket.id]?.username || "Usuario desconocido";
         console.log(`Jugador ${socket.id} (${username}) salió de la sala ${room}`);
 
-        // Eliminar jugador de la sala
-        delete rooms[room].players[socket.id];
-        delete rooms[room].ready[socket.id];
-        delete rooms[room].characters[socket.id];
-
-        // Transferir ownership si era el creador
         if (rooms[room].owner === socket.id) {
-            const remainingPlayers = Object.keys(rooms[room].players);
-            if (remainingPlayers.length > 0) {
-                rooms[room].owner = remainingPlayers[0]; // Nuevo Owner
-                console.log(`Nuevo creador de la sala ${room}: ${rooms[room].owner}`);
-            } else {
-                // Si no hay jugadores, eliminar sala y notificar
-                delete rooms[room];
-                console.log(`Sala ${room} eliminada por falta de jugadores`);
-                io.emit("roomsList", Object.keys(rooms)); // Notificar que la sala ya no existe
-                return callback({ success: true });
-            }
+            // Si el owner se va, se cierra la sala y se expulsa a todos
+            io.to(room).emit("roomClosed", {
+                message: "El dueño de la sala salió, sala cerrada.",
+            });
+            delete rooms[room]; // Se borra la sala
+            console.log(`Sala ${room} eliminada porque el Owner se fue.`);
+            io.emit("roomsList", Object.keys(rooms)); // Notificar a todos que la sala ya no existe
+        } else {
+            // Si no es el owner, simplemente lo eliminamos de la sala
+            delete rooms[room].players[socket.id];
+            delete rooms[room].ready[socket.id];
+            delete rooms[room].characters[socket.id];
+            io.to(room).emit("updateLobby", serializeRoom(rooms[room])); // 🔥 Notificar cambios
         }
-        // Notificar cambios a todos los jugadores
-        io.to(room).emit("updateLobby", serializeRoom(rooms[room]));
+
         callback({ success: true });
     });
 
@@ -198,24 +193,21 @@ io.on("connection", (socket) => {
                 const username = rooms[room].players[socket.id].username;
                 console.log(`Jugador ${socket.id} (${username}) se desconectó de la sala ${room}`);
 
+                if (rooms[room].owner === socket.id) {
+                    // Si el owner se desconecta, se cierra la sala y se expulsa a todos
+                    io.to(room).emit("roomClosed", {
+                        message: "El dueño de la sala se desconectó, sala cerrada.",
+                    });
+                    delete rooms[room];
+                    io.emit("roomsList", Object.keys(rooms));
+                    return;
+                }
+
+                // Si es un jugador normal, solo lo sacamos
                 delete rooms[room].players[socket.id];
                 delete rooms[room].ready[socket.id];
                 delete rooms[room].characters[socket.id];
 
-                // Si el creador se va, delegamos el rol a otro jugador
-                if (rooms[room].owner === socket.id) {
-                    const remainingPlayers = Object.keys(rooms[room].players);
-                    if (remainingPlayers.length > 0) {
-                        rooms[room].owner = remainingPlayers[0]; //Nuevo creador
-                        console.log(`Nuevo creador de la sala ${room}: ${rooms[room].owner}`);
-                    } else {
-                        delete rooms[room]; //La sala se borra si queda vacía
-                        console.log(`Sala ${room} eliminada por falta de jugadores`);
-                        io.emit("roomsList", Object.keys(rooms));
-                        return;
-                    }
-                }
-                // Notificar cambios
                 io.to(room).emit("updateLobby", serializeRoom(rooms[room]));
                 break;
             }
