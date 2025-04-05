@@ -1,5 +1,5 @@
+const axios = require("axios");
 const { Server } = require("socket.io");
-
 const io = new Server(3000, { cors: { origin: "*" } });
 
 let rooms = {};
@@ -90,7 +90,6 @@ io.on("connection", (socket) => {
         callback({ success: true });
     });
 
-    //server.js - Nueva funcionalidad: Configuración de la sala
     socket.on("setRoomConfig", ({ room, map, time, items }, callback) => {
         if (!rooms[room]) return;
 
@@ -113,45 +112,46 @@ io.on("connection", (socket) => {
         }
     });
 
-    socket.on("startGame", (room, callback) => {
-        if (!rooms[room]) return;
+    socket.on("startGame", async ({ room, players, config }, callback) => {
+        if (!rooms[room]) {
+            return callback?.({ success: false, message: "Sala no encontrada." });
+        }
 
         if (socket.id !== rooms[room].owner) {
-            if (typeof callback === "function") {
-                return callback({ success: false, message: "Solo el creador puede iniciar la partida." });
-            }
-            return;
+            return callback?.({ success: false, message: "Solo el creador puede iniciar la partida." });
         }
 
-        //Verificamos que al menos 2 jugadores estén listos
         const readyPlayers = Object.values(rooms[room].ready).filter(r => r).length;
-        if (readyPlayers < 2) {
-            if (typeof callback === "function") {
-                return callback({ success: false, message: "Se necesitan al menos 2 jugadores listos para iniciar." });
-            }
-            return;
+        if (readyPlayers < 1) {
+            return callback?.({ success: false, message: "Se necesitan al menos 2 jugadores listos." });
         }
 
-        //Iniciar el juego
-        rooms[room].gameStarted = true;
-        const players = Object.keys(rooms[room].players).map(playerId => ({
-            id: playerId,
-            username: rooms[room].players[playerId].username,
-            character: rooms[room].characters[playerId] || "/assets/default.png",
-            score: 0,
-            bombs: 1,
-            lasers: 0,
-            hammers: 0
-        }));
+        try {
+            // Crear el juego llamando al backend Java
+            const response = await axios.post("http://localhost:8080/games/create", {
+                roomId: room,
+                config,
+                players
+            });
 
-        console.log(`Juego iniciado en sala ${room} con jugadores:`, players.map(p => p.username).join(', '));
-        io.to(room).emit("gameStart", {
-            players,
-            config: rooms[room].config
-        });
+            const game = response.data;
 
-        if (typeof callback === "function") {
-            callback({ success: true });
+            // Marcar juego iniciado
+            rooms[room].gameStarted = true;
+
+            // Notificar a todos los clientes
+            io.to(room).emit("gameStart", {
+                gameId: game.gameId,
+                players: game.players,
+                config: game.config,
+                board: game.board
+            });
+
+            return callback?.({ success: true });
+
+        } catch (err) {
+            console.error("Error creando juego:", err);
+            return callback?.({ success: false, message: "Error creando juego en backend." });
         }
     });
     
