@@ -133,24 +133,24 @@ io.on("connection", (socket) => {
     }
 
     try {
-        // 🔒 Comentado: Llamada al backend Java
-        // const response = await axios.post("http://localhost:8080/games/create", {
-        //     roomId: room,
-        //     config,
-        //     players
-        // });
-        // const game = response.data;
-
-        // ✅ Usamos solo la info local
-        rooms[room].gameStarted = true;
-
-        io.to(room).emit("gameStart", {
-            gameId: `local-${Date.now()}`, // puedes usar un ID temporal
-            players,
+        const response = await axios.post("http://localhost:8080/games/create", {
+            roomId: room,
             config,
-            board: null // o genera un board mock si quieres mostrar algo
+            players
         });
 
+        const game = response.data;
+
+        // Marcar juego iniciado
+        rooms[room].gameStarted = true;
+
+        // Notificar a todos los clientes
+        io.to(room).emit("gameStart", {
+            gameId: game.gameId,
+            players: game.players,
+            config: game.config,
+            board: game.board
+        });
         return callback?.({ success: true });
 
     } catch (err) {
