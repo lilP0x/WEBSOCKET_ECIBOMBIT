@@ -122,7 +122,7 @@ io.on("connection", (socket) => {
         }
 
         const readyPlayers = Object.values(rooms[room].ready).filter(r => r).length;
-        if (readyPlayers < 1) {
+        if (readyPlayers < 2) {
             return callback?.({ success: false, message: "Se necesitan al menos 2 jugadores listos." });
         }
 
