@@ -19,12 +19,12 @@ io.on("connection", (socket) => {
                 players: {}, 
                 ready: {}, 
                 characters: {},
-                owner: socket.id, //El primer jugador en crear la sala es el dueño
+                owner: socket.id,
                 gameStarted: false,
                 config: {
-                    map: "default", //Mapa por defecto
-                    time: 5,      //Tiempo por defecto (minutos)
-                    items: 3      //Ítems por defecto
+                    map: "default",
+                    time: 5,
+                    items: 3
                 }
             };
         }
@@ -47,18 +47,24 @@ io.on("connection", (socket) => {
 
         // Verificar si el usuario ya está en otra sala
         for (const roomName in rooms) {
-            if (rooms[roomName].players[socket.id]) {
-                return callback({
-                    success: false,
-                    message: "Ya estás en otra sala"
-                });
+            const players = rooms[roomName].players;
+            for (const playerId in players) {
+                if (players[playerId].username === username) {
+                    return callback({
+                        success: false,
+                        message: "Ya estás en otra sala"
+                    });
+                }
             }
         }
     
         socket.join(room);
         rooms[room].players[socket.id] = {
             id: socket.id,
-            username: username
+            username: username,
+            score: 0,
+            specialItems: [],
+            bomb: 0
         };
         rooms[room].ready[socket.id] = false;
     
@@ -67,7 +73,7 @@ io.on("connection", (socket) => {
         if (typeof callback === "function") {
             callback({
                 success: true,
-                isOwner: rooms[room].owner === socket.id, // Verifica si el usuario es el dueño
+                isOwner: rooms[room].owner === socket.id,
                 config: rooms[room].config
             });
         }
@@ -113,47 +119,46 @@ io.on("connection", (socket) => {
     });
 
     socket.on("startGame", async ({ room, players, config }, callback) => {
-        if (!rooms[room]) {
-            return callback?.({ success: false, message: "Sala no encontrada." });
-        }
+    if (!rooms[room]) {
+        return callback?.({ success: false, message: "Sala no encontrada." });
+    }
 
-        if (socket.id !== rooms[room].owner) {
-            return callback?.({ success: false, message: "Solo el creador puede iniciar la partida." });
-        }
+    if (socket.id !== rooms[room].owner) {
+        return callback?.({ success: false, message: "Solo el creador puede iniciar la partida." });
+    }
 
-        const readyPlayers = Object.values(rooms[room].ready).filter(r => r).length;
-        if (readyPlayers < 2) {
-            return callback?.({ success: false, message: "Se necesitan al menos 2 jugadores listos." });
-        }
+    const readyPlayers = Object.values(rooms[room].ready).filter(r => r).length;
+    if (readyPlayers < 2) {
+        return callback?.({ success: false, message: "Se necesitan al menos 2 jugadores listos." });
+    }
 
-        try {
-            // Crear el juego llamando al backend Java
-            const response = await axios.post("http://localhost:8080/games/create", {
-                roomId: room,
-                config,
-                players
-            });
+    try {
+        const response = await axios.post("http://localhost:8080/games/create", {
+            roomId: room,
+            config,
+            players
+        });
 
-            const game = response.data;
+        const game = response.data;
 
-            // Marcar juego iniciado
-            rooms[room].gameStarted = true;
+        // Marcar juego iniciado
+        rooms[room].gameStarted = true;
 
-            // Notificar a todos los clientes
-            io.to(room).emit("gameStart", {
-                gameId: game.gameId,
-                players: game.players,
-                config: game.config,
-                board: game.board
-            });
+        // Notificar a todos los clientes
+        io.to(room).emit("gameStart", {
+            gameId: game.gameId,
+            players: game.players,
+            config: game.config,
+            board: game.board
+        });
+        return callback?.({ success: true });
 
-            return callback?.({ success: true });
+    } catch (err) {
+        console.error("Error iniciando juego:", err);
+        return callback?.({ success: false, message: "Error iniciando juego." });
+    }
+});
 
-        } catch (err) {
-            console.error("Error creando juego:", err);
-            return callback?.({ success: false, message: "Error creando juego en backend." });
-        }
-    });
     
     socket.on("selectCharacter", ({ room, character }) => {
         if (rooms[room]) {
@@ -219,7 +224,7 @@ function serializeRoom(room, socketId) {
     const { timer, ...roomData } = room;
     return {
         ...roomData,
-        isOwner: room.owner === socketId, // Determinar si el usuario es el dueño de la sala
+        isOwner: room.owner === socketId,
     };
 }
 
