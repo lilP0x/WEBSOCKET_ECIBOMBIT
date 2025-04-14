@@ -5,7 +5,7 @@ const io = new Server(3000, { cors: { origin: "*" } });
 let rooms = {};
 
 io.on("connection", (socket) => {
-    console.log("Jugador conectado:", socket.id);
+    console.log("Jugador conectado INICIO SERVER:", socket.id);
 
     socket.on("getRooms", () => {
         socket.emit("roomsList", Object.keys(rooms));
@@ -197,10 +197,32 @@ io.on("connection", (socket) => {
             delete rooms[room].players[socket.id];
             delete rooms[room].ready[socket.id];
             delete rooms[room].characters[socket.id];
-            io.to(room).emit("updateLobby", serializeRoom(rooms[room])); // 🔥 Notificar cambios
+            io.to(room).emit("updateLobby", serializeRoom(rooms[room]));
         }
 
         callback({ success: true });
+    });
+
+    socket.on("leaveGame", ({ room }, callback) => {
+        if (!rooms[room]) return callback?.({ success: false, message: "Sala no encontrada" });
+
+        const username = rooms[room].players[socket.id]?.username;
+        console.log(`Jugador EN EVENTO LEAVEGAME ${socket.id} (${username}) VA A SALIR del juego en sala ${room}`);
+
+        // Eliminar al jugador del juego
+        delete rooms[room].players[socket.id];
+        delete rooms[room].ready[socket.id];
+        delete rooms[room].characters[socket.id];
+
+        // Notificar al resto de jugadores en la sala que alguien salió del juego
+        io.to(room).emit("playerLeftGame", {
+            id: socket.id,
+            username: username
+        });
+
+        socket.leave(room); //ESTO QUE HACE
+
+        callback?.({ success: true });
     });
 
     socket.on("disconnect", () => {
