@@ -287,11 +287,11 @@ io.on("connection", (socket) => {
         if (!player || player.dead) return;
 
         let score = 0;
-        let kills = 0;
         
         for (const tile of explosionTiles) {
             const { x: xa, y: ya } = tile;
             const cell = game.board.cells.find(c => c.x === xa && c.y === ya);
+
             if (!cell) continue;
 
             // Si la celda es un bloque destruible
@@ -299,26 +299,45 @@ io.on("connection", (socket) => {
                 score += 10;
                 cell.type = 'EMPTY';
             }
-
-            // Si hay un jugador en la celda
-            if (cell.playerId !== null) {
-                const eliminatedId = cell.playerId;
-                cell.playerId = null;
-                score += 25;
-                kills += 1;
-                eliminatedPlayer = game.players.find(p => p.id === eliminatedId);
-                if (eliminatedPlayer) {
-                    eliminatedPlayer.dead = true;
-                }
-            }
-            console.log(score,kills);
         }
+
+        // sumo puntaje
         player.score = (player.score || 0) + score;
-        player.kills = (player.kills || 0) + kills;
-            
+        
+        io.in(roomName).emit("players", game.players);
     });
 
-    
+    socket.on("playerKilled", ({ gameId, killerId, victimId }) =>{
+        const roomName = Object.keys(rooms).find(room =>
+            Object.keys(rooms[room].players).includes(killerId)
+        );
+
+        if (!roomName || !gameId) return;
+
+        let score = 0;
+        let kills = 0;
+        const game = games[gameId];
+        const player = game.players.find(p => p.id === killerId);
+        const cell = game.board.cells.find(c => c.playerId === victimId);
+
+        if (!cell) return;
+
+        if (cell.playerId !== null) {
+
+            cell.playerId = null;
+            score += 25;
+            kills += 1;
+            eliminatedPlayer = game.players.find(p => p.id === victimId);
+
+            if (eliminatedPlayer) {
+                eliminatedPlayer.dead = true;
+            }
+        }
+        // sumo puntaje
+        player.score = (player.score || 0) + score;
+        player.kills = (player.kills || 0) + kills;
+        io.in(roomName).emit("players", game.players);
+    });
 
     socket.on("selectCharacter", ({ room, character }) => {
         if (rooms[room]) {
