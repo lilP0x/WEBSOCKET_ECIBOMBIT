@@ -3,82 +3,117 @@ const { Server } = require("socket.io");
 const io = new Server(3000, { cors: { origin: "*" } });
 
 let rooms = {};
+let games = {};
 
 io.on("connection", (socket) => {
-    console.log("Jugador conectado INICIO SERVER:", socket.id);
 
     socket.on("getRooms", () => {
         socket.emit("roomsList", Object.keys(rooms));
     });
 
+    socket.on("createRoom", (data, callback) => {
+        const { roomName, username } = data;
+        console.log(roomName);
+
+        const isUsernameTaken = Object.values(rooms).some(room => {
+            return Object.values(room.players).some(player => {
+                return player.username === username;
+            });
+        });
+
+
+        if (isUsernameTaken) {
+            return callback?.({
+                success: false,
+                message: "Este usuario ya está en una sala. No puede crear una nueva."
+            });
+        }
+
+        if (rooms[roomName]) {
+            return callback?.({
+                success: false,
+                message: "La sala ya existe."
+            });
+        }
+
+        rooms[roomName] = {
+            players: {},
+            ready: {},
+            characters: {},
+            owner: null, // sin owner inicialmente
+            gameStarted: false,
+            config: {
+                map: "default",
+                time: 5,
+                items: 3
+            }
+        };
+
+        console.log(`Sala ${roomName} creada.`);
+
+        callback?.({
+            success: true,
+            message: "Sala creada correctamente."
+        });
+
+        io.emit("roomsList", Object.keys(rooms));
+    });
+
     socket.on("joinRoom", (data, callback) => {
         const { room, username } = data;
 
-        if (!rooms[room]) {
-            rooms[room] = { 
-                players: {}, 
-                ready: {}, 
-                characters: {},
-                owner: socket.id,
-                gameStarted: false,
-                config: {
-                    map: "default",
-                    time: 5,
-                    items: 3
-                }
-            };
-        }
-    
-        io.emit("roomsList", Object.keys(rooms));
-   
-        if (rooms[room].gameStarted) {
-            if (typeof callback === "function") {
-                return callback({ success: false, message: "La partida ya ha comenzado." });
-            }
-            return;
-        }
-    
-        if (Object.keys(rooms[room].players).length >= 4) {
-            if (typeof callback === "function") {
-                return callback({ success: false, message: "La sala está llena." });
-            }
-            return;
+        const sala = rooms[room];
+        if (!sala) {
+            return callback?.({ success: false, message: "La sala no existe." });
         }
 
-        // Verificar si el usuario ya está en otra sala
-        for (const roomName in rooms) {
-            const players = rooms[roomName].players;
+        // Comprobar si ya está en otra sala con ese username
+        for (const r in rooms) {
+            const players = rooms[r].players;
             for (const playerId in players) {
                 if (players[playerId].username === username) {
-                    return callback({
+                    return callback?.({
                         success: false,
-                        message: "Ya estás en otra sala"
+                        message: "Ya estás en otra sala."
                     });
                 }
             }
         }
-    
+
+        if (sala.gameStarted) {
+            return callback?.({ success: false, message: "La partida ya comenzó." });
+        }
+
+        if (Object.keys(sala.players).length >= 4) {
+            return callback?.({ success: false, message: "La sala está llena." });
+        }
+
         socket.join(room);
-        rooms[room].players[socket.id] = {
+
+        sala.players[socket.id] = {
             id: socket.id,
             username: username,
             score: 0,
             specialItems: [],
             bomb: 0
         };
-        rooms[room].ready[socket.id] = false;
-    
-        console.log(`Jugador ${socket.id} (${username}) se unió a ${room}`);
-        // IMPORTANTE: Devolver isOwner en el callback
-        if (typeof callback === "function") {
-            callback({
-                success: true,
-                isOwner: rooms[room].owner === socket.id,
-                config: rooms[room].config
-            });
+
+        sala.ready[socket.id] = false;
+
+        if (!sala.owner) {
+            sala.owner = socket.id;
         }
 
-        io.to(room).emit("updateLobby", serializeRoom(rooms[room], socket.id));
+        console.log(`Jugador ${socket.id} (${username}) se unió a ${room}`);
+
+        callback?.({
+            success: true,
+            isOwner: sala.owner === socket.id,
+            config: sala.config
+        });
+
+        io.emit("roomsList", Object.keys(rooms));
+        io.to(room).emit("updateLobby", serializeRoom(sala, socket.id));
     });
 
     socket.on("setReady", ({ room, isReady }, callback) => {
@@ -149,6 +184,14 @@ io.on("connection", (socket) => {
             // Marcar juego iniciado
             rooms[room].gameStarted = true;
 
+            games[game.gameId] = {
+                room,
+                players: game.players,
+                config: game.config,
+                board: game.board
+            };
+            console.log(games[game.gameId]);
+
             // Notificar a todos los clientes LISTOS
             Object.keys(rooms[room].players).forEach((playerId) => {
                 if (rooms[room].ready[playerId]) {
@@ -169,6 +212,134 @@ io.on("connection", (socket) => {
             console.error("Error iniciando juego:", err);
             return callback?.({ success: false, message: "Error iniciando juego." });
         }
+    });
+
+    socket.on("connectToGame", ({ gameId, username }, callback) => {
+        const game = games[gameId];
+        if (!game) {
+            return callback?.({ success: false, message: "Juego no encontrado." });
+        }
+
+        const player = Object.values(game.players).find(p => p.username === username);
+
+        if (!player) {
+            return callback?.({ success: false, message: "No estás registrado en este juego." });
+        }
+
+        socket.join(game.room);
+        player.socketId = socket.id;
+        console.log(`Jugador ${socket.id} (${username}) se unio al juego ${gameId}`);
+        socket.emit("gameState", {
+            gameId,
+            board: game.board,
+            players: game.players,
+            config: game.config
+        });
+
+        return callback?.({ success: true });
+    });
+
+    //Mover players
+
+    socket.on("move", ({ direction, playerId, xa ,ya , x, y,gameId }) => {
+        const roomName = Object.keys(rooms).find(room =>
+            Object.keys(rooms[room].players).includes(playerId)
+        );
+        if (!roomName || !gameId ) return;
+
+        const game = games[gameId];
+        const afterCell = game.board.cells.find(cell => cell.x === x && cell.y === y);
+        const beforeCell = game.board.cells.find(cell => cell.x === xa && cell.y === ya);
+        if (afterCell.type === 'EMPTY'){
+            afterCell.playerId = playerId;
+            afterCell.type ='PLAYER';
+            beforeCell.playerId = null;
+            beforeCell.type = 'EMPTY';
+            // Reenvía el movimiento con coordenadas
+            socket.to(roomName).emit("playerMoved", {
+                playerId,
+                direction,
+                x,
+                y,
+            });
+        }
+    });
+
+    socket.on("bombPlaced", ({ playerId, x, y }) => {
+        const roomName = Object.keys(rooms).find(room =>
+            Object.keys(rooms[room].players).includes(playerId)
+        );
+        if (!roomName) return;
+        // Reenvía posicion de la bomba con coordenadas
+        socket.to(roomName).emit("bombPlaced", { x, y });
+    });
+
+    socket.on("bombExploded", ({ playerId, explosionTiles, gameId }) => {
+        const roomName = Object.keys(rooms).find(room =>
+            Object.keys(rooms[room].players).includes(playerId)
+        );
+
+        if (!roomName || !gameId) return;
+
+        socket.to(roomName).emit("bombExplodedClient", { explosionTiles });
+
+
+        const game = games[gameId];
+        const player = game.players.find(p => p.id === playerId);
+
+        if (!player || player.dead) return;
+
+        let score = 0;
+
+        for (const tile of explosionTiles) {
+            const { x: xa, y: ya } = tile;
+            const cell = game.board.cells.find(c => c.x === xa && c.y === ya);
+
+            if (!cell) continue;
+
+            // Si la celda es un bloque destruible
+            if (cell.type === 'BLOCK') {
+                score += 10;
+                cell.type = 'EMPTY';
+            }
+        }
+
+        // sumo puntaje
+        player.score = (player.score || 0) + score;
+
+        io.in(roomName).emit("players", game.players);
+    });
+
+    socket.on("playerKilled", ({ gameId, killerId, victimId }) =>{
+        const roomName = Object.keys(rooms).find(room =>
+            Object.keys(rooms[room].players).includes(killerId)
+        );
+
+        if (!roomName || !gameId) return;
+
+        let score = 0;
+        let kills = 0;
+        const game = games[gameId];
+        const player = game.players.find(p => p.id === killerId);
+        const cell = game.board.cells.find(c => c.playerId === victimId);
+
+        if (!cell) return;
+
+        if (cell.playerId !== null) {
+
+            cell.playerId = null;
+            score += 25;
+            kills += 1;
+            eliminatedPlayer = game.players.find(p => p.id === victimId);
+
+            if (eliminatedPlayer) {
+                eliminatedPlayer.dead = true;
+            }
+        }
+        // sumo puntaje
+        player.score = (player.score || 0) + score;
+        player.kills = (player.kills || 0) + kills;
+        io.in(roomName).emit("players", game.players);
     });
 
     socket.on("selectCharacter", ({ room, character }) => {
@@ -199,58 +370,10 @@ io.on("connection", (socket) => {
             delete rooms[room].characters[socket.id];
             io.to(room).emit("updateLobby", serializeRoom(rooms[room]));
         }
-
         callback({ success: true });
     });
 
-    socket.on("leaveGame", ({ room }, callback) => {
-        if (!rooms[room]) return callback?.({ success: false, message: "Sala no encontrada" });
-
-        const username = rooms[room].players[socket.id]?.username;
-        console.log(`Jugador EN EVENTO LEAVEGAME ${socket.id} (${username}) VA A SALIR del juego en sala ${room}`);
-
-        // Eliminar al jugador del juego
-        delete rooms[room].players[socket.id];
-        delete rooms[room].ready[socket.id];
-        delete rooms[room].characters[socket.id];
-
-        // Notificar al resto de jugadores en la sala que alguien salió del juego
-        io.to(room).emit("playerLeftGame", {
-            id: socket.id,
-            username: username
-        });
-
-        socket.leave(room); //ESTO QUE HACE
-
-        callback?.({ success: true });
-    });
-
-    socket.on("disconnect", () => {
-        for (let room in rooms) {
-            if (rooms[room].players[socket.id]) {
-                const username = rooms[room].players[socket.id].username;
-                console.log(`Jugador ${socket.id} (${username}) se desconectó de la sala ${room}`);
-
-                if (rooms[room].owner === socket.id) {
-                    // Si el owner se desconecta, se cierra la sala y se expulsa a todos
-                    io.to(room).emit("roomClosed", {
-                        message: "El dueño de la sala se desconectó, sala cerrada.",
-                    });
-                    delete rooms[room];
-                    io.emit("roomsList", Object.keys(rooms));
-                    return;
-                }
-
-                // Si es un jugador normal, solo lo sacamos
-                delete rooms[room].players[socket.id];
-                delete rooms[room].ready[socket.id];
-                delete rooms[room].characters[socket.id];
-
-                io.to(room).emit("updateLobby", serializeRoom(rooms[room]));
-                break;
-            }
-        }
-    });
+    socket.on("disconnect", () => {});
 });
 
 function serializeRoom(room, socketId) {
