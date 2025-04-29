@@ -21,7 +21,6 @@ io.on("connection", (socket) => {
             });
         });
 
-
         if (isUsernameTaken) {
             return callback?.({
                 success: false,
@@ -312,14 +311,18 @@ io.on("connection", (socket) => {
         const eliminatedPlayer = game.players.find(p => p.id === victimId);
         if (eliminatedPlayer) {
             eliminatedPlayer.dead = true;
+            console.log("JUGADORES RESTANTES: "+game.players);
+            console.log("JUGADOR MUERTO?????: "+eliminatedPlayer);
         }
 
         const killerPlayer = game.players.find(p => p.id === killerId);
-        if (killerPlayer) {
+
+        //Aqui AGREGAMOS la condicion para que no aumente score ni kills al matarse a si mismo
+        if (killerPlayer && killerId !== victimId) {
             killerPlayer.score = (killerPlayer.score || 0) + 25;
             killerPlayer.kills = (killerPlayer.kills || 0) + 1;
         }
-
+        //No estamos borrando al jugador del game.players sino que estamos solamente cambiando su estado a dead=true
         io.in(game.room).emit("players", game.players); // Actualizamos barra lateral
     });
 
