@@ -239,24 +239,23 @@ io.on("connection", (socket) => {
         return callback?.({ success: true });
     });
 
-    //Mover players
-
-    socket.on("move", ({ direction, playerId, xa ,ya , x, y,gameId }) => {
-        const roomName = Object.keys(rooms).find(room =>
-            Object.keys(rooms[room].players).includes(playerId)
-        );
-        if (!roomName || !gameId ) return;
-
+    socket.on("move", ({ direction, playerId, xa, ya, x, y, gameId }) => {
         const game = games[gameId];
+        if (!game) return;
+
         const afterCell = game.board.cells.find(cell => cell.x === x && cell.y === y);
         const beforeCell = game.board.cells.find(cell => cell.x === xa && cell.y === ya);
-        if (afterCell.type === 'EMPTY'){
+
+        if (afterCell && afterCell.type === 'EMPTY') {
             afterCell.playerId = playerId;
-            afterCell.type ='PLAYER';
-            beforeCell.playerId = null;
-            beforeCell.type = 'EMPTY';
-            // Reenvía el movimiento con coordenadas
-            socket.to(roomName).emit("playerMoved", {
+            afterCell.type = 'PLAYER';
+
+            if (beforeCell) {
+                beforeCell.playerId = null;
+                beforeCell.type = 'EMPTY';
+            }
+
+            socket.to(game.room).emit("playerMoved", {
                 playerId,
                 direction,
                 x,
@@ -265,28 +264,20 @@ io.on("connection", (socket) => {
         }
     });
 
-    socket.on("bombPlaced", ({ playerId, x, y }) => {
-        const roomName = Object.keys(rooms).find(room =>
-            Object.keys(rooms[room].players).includes(playerId)
-        );
-        if (!roomName) return;
-        // Reenvía posicion de la bomba con coordenadas
-        socket.to(roomName).emit("bombPlaced", { x, y });
+    socket.on("bombPlaced", ({ playerId, x, y, gameId }) => {
+        const game = games[gameId];
+        if (!game) return;
+
+        socket.to(game.room).emit("bombPlaced", { x, y });
     });
 
     socket.on("bombExploded", ({ playerId, explosionTiles, gameId }) => {
-        const roomName = Object.keys(rooms).find(room =>
-            Object.keys(rooms[room].players).includes(playerId)
-        );
-
-        if (!roomName || !gameId) return;
-
-        socket.to(roomName).emit("bombExplodedClient", { explosionTiles });
-
-
         const game = games[gameId];
-        const player = game.players.find(p => p.id === playerId);
+        if (!game) return;
 
+        socket.to(game.room).emit("bombExplodedClient", { explosionTiles });
+
+        const player = game.players.find(p => p.id === playerId);
         if (!player || player.dead) return;
 
         let score = 0;
@@ -297,49 +288,39 @@ io.on("connection", (socket) => {
 
             if (!cell) continue;
 
-            // Si la celda es un bloque destruible
             if (cell.type === 'BLOCK') {
                 score += 10;
                 cell.type = 'EMPTY';
             }
         }
 
-        // sumo puntaje
         player.score = (player.score || 0) + score;
-
-        io.in(roomName).emit("players", game.players);
+        io.in(game.room).emit("players", game.players);
     });
 
-    socket.on("playerKilled", ({ gameId, killerId, victimId }) =>{
-        const roomName = Object.keys(rooms).find(room =>
-            Object.keys(rooms[room].players).includes(killerId)
-        );
-
-        if (!roomName || !gameId) return;
-
-        let score = 0;
-        let kills = 0;
+    socket.on("playerKilled", ({ gameId, killerId, victimId, x, y }) => {
         const game = games[gameId];
-        const player = game.players.find(p => p.id === killerId);
-        const cell = game.board.cells.find(c => c.playerId === victimId);
+        if (!game) return;
 
-        if (!cell) return;
+        const cell = game.board.cells.find(c => c.x === x && c.y === y);
 
-        if (cell.playerId !== null) {
-
+        if (cell && cell.playerId === victimId) {
             cell.playerId = null;
-            score += 25;
-            kills += 1;
-            eliminatedPlayer = game.players.find(p => p.id === victimId);
-
-            if (eliminatedPlayer) {
-                eliminatedPlayer.dead = true;
-            }
+            cell.type = 'EMPTY';
         }
-        // sumo puntaje
-        player.score = (player.score || 0) + score;
-        player.kills = (player.kills || 0) + kills;
-        io.in(roomName).emit("players", game.players);
+
+        const eliminatedPlayer = game.players.find(p => p.id === victimId);
+        if (eliminatedPlayer) {
+            eliminatedPlayer.dead = true;
+        }
+
+        const killerPlayer = game.players.find(p => p.id === killerId);
+        if (killerPlayer) {
+            killerPlayer.score = (killerPlayer.score || 0) + 25;
+            killerPlayer.kills = (killerPlayer.kills || 0) + 1;
+        }
+
+        io.in(game.room).emit("players", game.players); // Actualizamos barra lateral
     });
 
     socket.on("selectCharacter", ({ room, character }) => {
