@@ -373,10 +373,56 @@ io.on("connection", (socket) => {
         // Notificar al resto
         io.in(game.room).emit("players", game.players);
         io.in(game.room).emit("playerLeft", { playerId }); // útil si quieres animación futura
+
+        // También limpiar de la sala si sigue registrada
+        const roomId = game.room;
+        const room = rooms[roomId];
+        if (room) {
+            delete room.players[playerId];
+            delete room.ready[playerId];
+            delete room.characters[playerId];
+            io.emit("roomsList", Object.keys(rooms));
+        }
+
         callback?.({ success: true });
     });
 
-    socket.on("disconnect", () => {});
+    socket.on("disconnect", () => {
+        // Remover de cualquier juego
+        for (const gameId in games) {
+            const game = games[gameId];
+            const player = game.players.find(p => p.socketId === socket.id);
+            if (player && !player.dead) {
+                console.log(`Desconexión detectada. Eliminando ${socket.id} del juego ${gameId}`);
+                player.dead = true;
+                const playerId = player.id;
+                const cell = game.board.cells.find(c => c.playerId === player.id);
+                if (cell) {
+                    cell.playerId = null;
+                    cell.type = 'EMPTY';
+                }
+                io.to(game.room).emit("players", game.players);
+                io.in(game.room).emit("playerLeft", { playerId });
+            }
+        }
+
+        // Remover de cualquier sala (no activa)
+        for (const roomName in rooms) {
+            const room = rooms[roomName];
+            if (room.players[socket.id]) {
+                delete room.players[socket.id];
+                delete room.ready[socket.id];
+                delete room.characters[socket.id];
+                if (room.owner === socket.id) {
+                    io.to(roomName).emit("roomClosed", { message: "El dueño de la sala salió." });
+                    delete rooms[roomName];
+                    io.emit("roomsList", Object.keys(rooms));
+                } else {
+                    io.to(roomName).emit("updateLobby", serializeRoom(room));
+                }
+            }
+        }
+    });
 });
 
 function serializeRoom(room, socketId) {
