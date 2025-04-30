@@ -297,10 +297,10 @@ io.on("connection", (socket) => {
         io.in(game.room).emit("players", game.players);
     });
 
-    socket.on("playerKilled", ({ gameId, killerId, victimId, x, y }) => {
+    socket.on("playerKilled", ({ gameId, killerId, victimId, playerId, x, y }) => {
         const game = games[gameId];
         if (!game) return;
-
+        //socket.to(game.room).emit("reportKill", { killerId, victimId, playerId });
         const cell = game.board.cells.find(c => c.x === x && c.y === y);
 
         if (cell && cell.playerId === victimId) {
@@ -311,8 +311,6 @@ io.on("connection", (socket) => {
         const eliminatedPlayer = game.players.find(p => p.id === victimId);
         if (eliminatedPlayer) {
             eliminatedPlayer.dead = true;
-            console.log("JUGADORES RESTANTES: "+game.players);
-            console.log("JUGADOR MUERTO?????: "+eliminatedPlayer);
         }
 
         const killerPlayer = game.players.find(p => p.id === killerId);
@@ -322,7 +320,7 @@ io.on("connection", (socket) => {
             killerPlayer.score = (killerPlayer.score || 0) + 25;
             killerPlayer.kills = (killerPlayer.kills || 0) + 1;
         }
-        //No estamos borrando al jugador del game.players sino que estamos solamente cambiando su estado a dead=true
+        //No estamos borrando al jugador del game.players, sino que estamos solamente cambiando su estado a dead=true
         io.in(game.room).emit("players", game.players); // Actualizamos barra lateral
     });
 
@@ -355,6 +353,27 @@ io.on("connection", (socket) => {
             io.to(room).emit("updateLobby", serializeRoom(rooms[room]));
         }
         callback({ success: true });
+    });
+
+    socket.on("leaveGame", ({ gameId, playerId, x, y }, callback) => {
+        const game = games[gameId];
+        if (!game) return callback?.({ success: false });
+
+        const cell = game.board.cells.find(c => c.x === x && c.y === y);
+        if (cell && cell.playerId === playerId) {
+            cell.playerId = null;
+            cell.type = 'EMPTY';
+        }
+
+        const player = game.players.find(p => p.id === playerId);
+        if (player) {
+            player.dead = true;
+        }
+
+        // Notificar al resto
+        io.in(game.room).emit("players", game.players);
+        io.in(game.room).emit("playerLeft", { playerId }); // útil si quieres animación futura
+        callback?.({ success: true });
     });
 
     socket.on("disconnect", () => {});
