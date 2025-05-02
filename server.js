@@ -154,7 +154,7 @@ io.on("connection", (socket) => {
         }
     });
 
-    socket.on("startGame", async ({ room, players, config }, callback) => {
+    socket.on("startGame", async ({ room, players, config }, token, callback) => {
         if (!rooms[room]) {
             return callback?.({ success: false, message: "Sala no encontrada." });
         }
@@ -178,6 +178,10 @@ io.on("connection", (socket) => {
                 roomId: room,
                 config,
                 players
+            },{
+                headers: {
+                    Authorization: `Bearer ${token}`
+                }
             });
     
             const game = response.data;
@@ -202,11 +206,15 @@ io.on("connection", (socket) => {
                 }); 
             });
 
-            return callback?.({ success: true });
+            if (typeof callback === "function") {
+                return callback({ success: true });
+            }
     
         } catch (err) {
             console.error("Error iniciando juego:", err);
-            return callback?.({ success: false, message: "Error iniciando juego." });
+            if (typeof callback === "function") {
+                return callback({ success: false, message: "Error iniciando juego: " + (err.response ? err.response.data.message : err.message) });
+            }
         }
     });
     
