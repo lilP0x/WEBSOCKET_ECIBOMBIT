@@ -154,23 +154,35 @@ io.on("connection", (socket) => {
         }
     });
 
-    socket.on("startGame", async ({ room, players, config }, callback) => {
+    socket.on("startGame", async ({ room, players, config }, token, callback) => {
         if (!rooms[room]) {
-            return callback?.({ success: false, message: "Sala no encontrada." });
+            if (typeof callback === "function") {
+                return callback({ success: false, message: "Sala no encontrada." });
+            }
+            return;
         }
     
         if (socket.id !== rooms[room].owner) {
-            return callback?.({ success: false, message: "Solo el creador puede iniciar la partida." });
+            if (typeof callback === "function") {
+                return callback({ success: false, message: "Solo el creador puede iniciar la partida." });
+            }
+            return;
         }
     
         const readyPlayers = Object.values(rooms[room].ready).filter(r => r).length;
     
         if (!rooms[room].ready[rooms[room].owner]) {
-            return callback?.({ success: false, message: "El creador también debe estar listo para iniciar la partida." });
+            if (typeof callback === "function") {
+                return callback({ success: false, message: "El creador también debe estar listo para iniciar la partida." });
+            }
+            return;
         }
     
         if (readyPlayers < 2) {
-            return callback?.({ success: false, message: "Se necesitan al menos 2 jugadores listos." });
+            if (typeof callback === "function") {
+                return callback({ success: false, message: "Se necesitan al menos 2 jugadores listos." });
+            }
+            return;
         }
     
         try {
@@ -178,13 +190,17 @@ io.on("connection", (socket) => {
                 roomId: room,
                 config,
                 players
+            }, {
+                headers: {
+                    Authorization: `Bearer ${token}`,
+                    'Content-Type': 'application/json'
+                }
             });
     
             const game = response.data;
     
-            // Marcar juego iniciado
             rooms[room].gameStarted = true;
-            
+    
             games[game.gameId] = {
                 room,
                 players: game.players,
@@ -192,23 +208,28 @@ io.on("connection", (socket) => {
                 board: game.board
             };
             console.log(games[game.gameId]);
-            
+    
             Object.keys(rooms[room].players).forEach((playerId) => {
                 io.to(playerId).emit("gameStart", {
                     gameId: game.gameId,
                     players: game.players,
                     config: game.config,
                     board: game.board
-                }); 
+                });
             });
-
-            return callback?.({ success: true });
+    
+            if (typeof callback === "function") {
+                return callback({ success: true });
+            }
     
         } catch (err) {
             console.error("Error iniciando juego:", err);
-            return callback?.({ success: false, message: "Error iniciando juego." });
+            if (typeof callback === "function") {
+                return callback({ success: false, message: "Error iniciando juego." });
+            }
         }
     });
+    
     
 
     socket.on("connectToGame", ({ gameId, username }, callback) => {
