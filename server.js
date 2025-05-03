@@ -187,9 +187,9 @@ io.on("connection", (socket) => {
                 room,
                 players: game.players,
                 config: game.config,
-                board: game.board
+                board: game.board,
+                connectedPlayers:0
             };
-            console.log(games[game.gameId]);
 
             // Notificar a todos los clientes LISTOS
             Object.keys(rooms[room].players).forEach((playerId) => {
@@ -227,16 +227,53 @@ io.on("connection", (socket) => {
 
         socket.join(game.room);
         player.socketId = socket.id;
+
+        game.connectedPlayers = (game.connectedPlayers || 0) + 1;
+
+        if (game.connectedPlayers === game.players.length) {
+            let countdown = 3;
+        
+            // Initial countdown
+            io.in(game.room).emit("startTimerGame", { countdown });
+        
+            const countdownInterval = setInterval(() => {
+                countdown--;
+                if (countdown > 0) {
+                    io.in(game.room).emit("startTimerGame", { countdown });
+                } else {
+                    clearInterval(countdownInterval);
+                    io.in(game.room).emit("startGame");
+        
+                    // Game duration timer
+                    game.timeLeft = game.config.time * 60;
+        
+                    io.in(game.room).emit("gameTimerTick", {  timeLeft: game.timeLeft});
+        
+                    game.timerInterval = setInterval(() => {
+                        game.timeLeft--;
+                        
+                        if (game.timeLeft > 0) {
+                            io.in(game.room).emit("gameTimerTick", { timeLeft: game.timeLeft });
+                        } else {
+                            clearInterval(game.timerInterval);
+                            game.timerInterval = null;
+                    
+                            io.in(game.room).emit("gameTimerTick", { timeLeft: 0 });
+                    
+                            checkForWinner(game);
+                        }
+                    }, 1000);
+                }
+            }, 1000);
+        }
+
+
         console.log(`Jugador ${socket.id} (${username}) se unio al juego ${gameId}`);
-        socket.emit("gameState", {
-            gameId,
-            board: game.board,
-            players: game.players,
-            config: game.config
-        });
+
 
         return callback?.({ success: true });
     });
+
 
     socket.on("move", ({ direction, playerId, xa, ya, x, y, gameId }) => {
         const game = games[gameId];
@@ -294,6 +331,7 @@ io.on("connection", (socket) => {
         }
 
         player.score = (player.score || 0) + score;
+        checkForWinner(game);
         io.in(game.room).emit("players", game.players);
     });
 
@@ -310,19 +348,89 @@ io.on("connection", (socket) => {
 
         const eliminatedPlayer = game.players.find(p => p.id === victimId);
         if (eliminatedPlayer) {
+            const previouslyAlive = game.players.filter(p => !p.dead).length;
             eliminatedPlayer.dead = true;
+            const currentlyAlive = game.players.filter(p => !p.dead).length;
+            const simultaneousDeath = previouslyAlive === 2 && currentlyAlive === 0;
+            checkForWinner(game, simultaneousDeath);
         }
 
         const killerPlayer = game.players.find(p => p.id === killerId);
+
+        io.in(game.room).emit("playerDied", {
+            victimId,
+            killerId,
+            victimUsername: eliminatedPlayer?.username,
+            killerUsername: killerPlayer?.username,
+            suicide: killerId === victimId
+        });
 
         //Aqui AGREGAMOS la condicion para que no aumente score ni kills al matarse a si mismo
         if (killerPlayer && killerId !== victimId) {
             killerPlayer.score = (killerPlayer.score || 0) + 25;
             killerPlayer.kills = (killerPlayer.kills || 0) + 1;
         }
+
         //No estamos borrando al jugador del game.players, sino que estamos solamente cambiando su estado a dead=true
         io.in(game.room).emit("players", game.players); // Actualizamos barra lateral
     });
+
+    function checkForWinner(game, simultaneousDeath = false) {
+
+        const alivePlayers = game.players.filter(p => !p.dead);
+
+        if (alivePlayers.length === 0) {
+            if (game.timerInterval) {
+                clearInterval(game.timerInterval);
+                game.timerInterval = null;
+            }
+
+            io.in(game.room).emit("gameOver", {
+                winner: null,
+                reason: simultaneousDeath
+                    ? "Todos los jugadores vivos murieron al mismo tiempo."
+                    : "Todos los jugadores han sido eliminados."
+            });
+
+            return true;
+        }
+    
+        if (alivePlayers.length === 1) {
+            // Solo queda uno vivo
+            if (game.timerInterval) {
+                clearInterval(game.timerInterval);
+                game.timerInterval = null;
+            }
+
+            console.log(alivePlayers.map(p => p.id));
+            io.in(game.room).emit("gameOver", {
+                winners: alivePlayers.map(p => p.id),
+                winnerUserNames: alivePlayers.map(p => p.username),
+                reason: "Último jugador con vida."
+                
+            });
+            return true;
+        }
+    
+        if (game.timeLeft === 0) {
+            const topScore = Math.max(...alivePlayers.map(p => p.score || 0));
+            const topPlayers = alivePlayers.filter(p => (p.score || 0) === topScore);
+
+            const isTie = topPlayers.length > 1;
+            console.log(topPlayers.map(p => p.id));
+            io.in(game.room).emit("gameOver", {
+                winners: topPlayers.map(p => p.id),
+                winnerUsernames: topPlayers.map(p => p.username),
+                reason: isTie
+                    ? "Empate entre jugadores con el mayor puntaje."
+                    : "Mayor puntaje al finalizar el tiempo."
+            });
+            return true;
+        }
+    
+        return false;
+    }
+    
 
     socket.on("selectCharacter", ({ room, character }) => {
         if (rooms[room]) {
