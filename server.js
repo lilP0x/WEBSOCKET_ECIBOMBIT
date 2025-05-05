@@ -245,8 +245,9 @@ io.on("connection", (socket) => {
                     io.in(game.room).emit("startGame");
         
                     // Game duration timer
-                    game.timeLeft = game.config.time * 60;
-        
+                    //game.timeLeft = game.config.time * 60;
+                    game.timeLeft = 70;
+    
                     io.in(game.room).emit("gameTimerTick", {  timeLeft: game.timeLeft});
         
                     game.timerInterval = setInterval(() => {
@@ -257,9 +258,13 @@ io.on("connection", (socket) => {
                         } else {
                             clearInterval(game.timerInterval);
                             game.timerInterval = null;
-                    
                             io.in(game.room).emit("gameTimerTick", { timeLeft: 0 });
-                    
+                            const totalTime = game.config.time * 60;
+                            game.players.forEach(player => {
+                                if (!player.dead) {
+                                    player.timeAlive = totalTime;
+                                }
+                            });                  
                             checkForWinner(game);
                         }
                     }, 1000);
@@ -331,7 +336,6 @@ io.on("connection", (socket) => {
         }
 
         player.score = (player.score || 0) + score;
-        checkForWinner(game);
         io.in(game.room).emit("players", game.players);
     });
 
@@ -348,11 +352,9 @@ io.on("connection", (socket) => {
 
         const eliminatedPlayer = game.players.find(p => p.id === victimId);
         if (eliminatedPlayer) {
-            const previouslyAlive = game.players.filter(p => !p.dead).length;
             eliminatedPlayer.dead = true;
-            const currentlyAlive = game.players.filter(p => !p.dead).length;
-            const simultaneousDeath = previouslyAlive === 2 && currentlyAlive === 0;
-            checkForWinner(game, simultaneousDeath);
+            eliminatedPlayer.timeAlive = game.timeLeft;
+            checkForWinner(game);
         }
 
         const killerPlayer = game.players.find(p => p.id === killerId);
@@ -374,62 +376,130 @@ io.on("connection", (socket) => {
         //No estamos borrando al jugador del game.players, sino que estamos solamente cambiando su estado a dead=true
         io.in(game.room).emit("players", game.players); // Actualizamos barra lateral
     });
-
-    function checkForWinner(game, simultaneousDeath = false) {
-
+    
+    function checkForWinner(game) {
         const alivePlayers = game.players.filter(p => !p.dead);
-
+        
         if (alivePlayers.length === 0) {
-            if (game.timerInterval) {
-                clearInterval(game.timerInterval);
-                game.timerInterval = null;
-            }
 
-            io.in(game.room).emit("gameOver", {
-                winner: null,
-                reason: simultaneousDeath
-                    ? "Todos los jugadores vivos murieron al mismo tiempo."
-                    : "Todos los jugadores han sido eliminados."
-            });
-
+            const result = determineWinner(game.players.filter(p => p.dead));
+            handleWinnerResult(game, result);
+            assignPlayerRanks(game);
+            console.log("1", result);
             return true;
         }
-    
+
+        if (game.timeLeft === 0) {
+            const result = determineWinner(alivePlayers);
+            handleWinnerResult(game, result);
+            assignPlayerRanks(game);
+            console.log("3", result);
+            return true;
+        }
+ 
         if (alivePlayers.length === 1) {
             // Solo queda uno vivo
+            const player = alivePlayers[0];
+            game.config.time = game.config.time - (game.timeLeft/60);
+            player.timeAlive = game.config.time * 60
+
             if (game.timerInterval) {
                 clearInterval(game.timerInterval);
                 game.timerInterval = null;
             }
-
-            console.log(alivePlayers.map(p => p.id));
-            io.in(game.room).emit("gameOver", {
-                winners: alivePlayers.map(p => p.id),
-                winnerUserNames: alivePlayers.map(p => p.username),
-                reason: "Último jugador con vida."
-                
-            });
+            const result = determineWinner(alivePlayers);
+            handleWinnerResult(game, result);
+            assignPlayerRanks(game);
+            console.log("2", result);
             return true;
         }
-    
-        if (game.timeLeft === 0) {
-            const topScore = Math.max(...alivePlayers.map(p => p.score || 0));
-            const topPlayers = alivePlayers.filter(p => (p.score || 0) === topScore);
 
-            const isTie = topPlayers.length > 1;
-            console.log(topPlayers.map(p => p.id));
-            io.in(game.room).emit("gameOver", {
-                winners: topPlayers.map(p => p.id),
-                winnerUsernames: topPlayers.map(p => p.username),
-                reason: isTie
-                    ? "Empate entre jugadores con el mayor puntaje."
-                    : "Mayor puntaje al finalizar el tiempo."
-            });
-            return true;
-        }
-    
+        
         return false;
     }
+
+
+    // Anunciar el ganador o ganadores
+    function handleWinnerResult(game, result) {
+        if (result.winner) {
+            io.in(game.room).emit("gameOver", {
+                winners: [result.winner.id],
+                winnerUsernames: [result.winner.username],
+                reason: result.reason
+            });
+        } else {
+            io.in(game.room).emit("gameOver", {
+                winners: result.winners.map(p => p.id),
+                winnerUsernames: result.winners.map(p => p.username),
+                reason: result.reason
+            });
+        }
+    }
+
+    // Asignamos las posiciones finales
+
+    function assignPlayerRanks(game) {
+        const players = game.players;
+        // Filtra jugadores que no son ganadores
+        const nonWinners = players.filter(p => !p.winner);
+    
+        // Ordena por tiempo de vida descendente
+        const sorted = [...nonWinners].sort((a, b) => (b.timeAlive || 0) - (a.timeAlive || 0));
+    
+        let rank = 2;
+        for (let i = 0; i < sorted.length && rank <= 4; i++) {
+            if (i > 0 && (sorted[i].timeAlive || 0) < (sorted[i - 1].timeAlive || 0)) {
+                rank++;
+            }
+            if (rank <= 4) {
+                sorted[i].playerRank = rank;
+            }
+        }
+    }
+    
+    
+
+    /*Se revisa las posibles formas de evitar el empate y dictaminar un ganador 
+    la revision se hace en el siguiente orden 
+    tiempoVida -> MayorPuntaje -> Mayor#Muertes (Si es nulo se declara como ganador
+    o ganadores el resultado que obtuvimos de mayor numero de muertes)
+        Si queda dos o mas jugadores despues de estas condiciones se declara un empate
+    */
+
+    function determineWinner(players) {
+        // Paso 1: Mayor tiempo de vida
+        const longestSurvivalTime = Math.max(...players.map(p => p.timeAlive || 0));
+        let finalists = players.filter(p => p.timeAlive === longestSurvivalTime);
+        let reason = "Mayor tiempo de vida";
+    
+        // Paso 2: Mayor puntaje
+        if (finalists.length > 1) {
+            const highestScore = Math.max(...finalists.map(p => p.score || 0));
+            finalists = finalists.filter(p => (p.score || 0) === highestScore);
+            reason = "Mayor puntaje";
+        }
+    
+        // Paso 3: Mayor cantidad de kills
+        if (finalists.length > 1) {
+            const highestKills = Math.max(...finalists.map(p => p.kills || 0));
+            finalists = finalists.filter(p => (p.kills || 0) === highestKills);
+            reason = "Mayor cantidad de muertes";
+        }
+    
+        // Paso 4: Si aún hay empate, se declara empate
+        if (finalists.length === 1) {
+            finalists[0].winner = true;
+            finalists[0].playerRank = 1;
+            return { winner: finalists[0], reason };
+        } else {
+            finalists.forEach(p => {
+                p.winner = true;
+                p.playerRank = 1;
+            });
+            return { winners: finalists, reason: "Empate entre jugadores con los mismos criterios" };
+        }
+    }
+    
     
 
     socket.on("selectCharacter", ({ room, character }) => {
@@ -465,6 +535,7 @@ io.on("connection", (socket) => {
 
     socket.on("leaveGame", ({ gameId, playerId, x, y }, callback) => {
         const game = games[gameId];
+
         if (!game) return callback?.({ success: false });
 
         const cell = game.board.cells.find(c => c.x === x && c.y === y);
@@ -476,6 +547,7 @@ io.on("connection", (socket) => {
         const player = game.players.find(p => p.id === playerId);
         if (player) {
             player.dead = true;
+            checkForWinner(game);
         }
 
         // Notificar al resto
